@@ -37651,33 +37651,6 @@
   {
     "area" : "",
     "category" : "",
-    "id" : "cmu-grandma-s-gingerbread",
-    "imageURL" : "",
-    "ingredients" : [
-      "2 eggs 1 tsp. allspice",
-      "3/4 cup brown sugar 3 tsp. ginger",
-      "3/4 cup molasses 3 tsp. cinnamon",
-      "3/4 cup melted crisco 1/2 tsp cloves",
-      "2 1/2 cups flour 1 tsp nutmeg",
-      "2 tsp. baking soda 2 tsp. pummpkin pie spice",
-      "1/2 tsp. baking powder 1 cup boiling water"
-    ],
-    "instructions" : "Grandma's Gingerbread\nI believe someone requested a recipe for gingerbread ... here is my\ngrandmother's version I have used since I was a little girl.  It is\nspicier than some, but is very good.\nAdd beaten eggs to sugar, syrup and melted crisco.  Sift dry\ningredients and add to egg mixture.  Lastly, add boiling water\nand mix well.  Pour into greased and floured bundt pan and bake\nat 350 degrees for 30 to 40 minutes.\nSusie Keating\ntnessh.sbc.com\namyl\nCarnegie Mellon's School of Computer Science  (SCS) graciously hosts the Recipe Archive. We invite you to learn about SCS educational programs and research.",
-    "measures" : [
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      ""
-    ],
-    "source" : "CMU Recipe Archive",
-    "title" : "Grandma's Gingerbread"
-  },
-  {
-    "area" : "",
-    "category" : "",
     "id" : "cmu-helen-s-apple-coffee-cake",
     "imageURL" : "https://foodish-api.com/images/dessert/dessert34.jpg",
     "ingredients" : [
@@ -37954,33 +37927,6 @@
     ],
     "source" : "CMU Recipe Archive",
     "title" : "Orange Cake"
-  },
-  {
-    "area" : "",
-    "category" : "",
-    "id" : "cmu-peach-glazed-savarin",
-    "imageURL" : "",
-    "ingredients" : [
-      "2 cups all purpose flour",
-      "1 package active dry yeast",
-      "2/3 cup milk",
-      "6 tablespoons butter",
-      "2 tablespoons sugar",
-      "1/2 teaspoon salt",
-      "3 eggs"
-    ],
-    "instructions" : "Peach-Glazed Savarin\nSavarin Syrup\nPeach Glaze\n1 1/2 cups sliced strawberries, halved grapes, *or* sectioned oranges\nCreme Chantilly\nIn a large mixer bowl combine 1 1/2 cups of the flour and yeast.  In a\nsaucepan heat milk, butter, sugar and salt just till mixture is warm\n(115 to 120) and butter is almost melted; stir constantly.  Add to flour\nmixture, add eggs.  Beat with an electric mixer on low speed for 1/2\nminute, scraping bowl.  Beat for 3 minutes on high speed.  Using a spoon,\nstir in remaining flour.  Cover; let rest 10 minutes.  Spoon batter into\na well greased 6 cup savarin mold or ring.  Cover, let rise in a warm\nplace till nearly double (about 40 minutes).  Bake in a 350F oven for\n25 to 35 minutes.  Cool in pan 5 minutes; transfer to a wire rack over\nwaxed paper.  Wtih a fork, prick top of ring at 1 inch intervals.\nPrepare Savarin Syrup; gradually drizzle over warm ring till all the\nsyrup is absorbed.  Let stand 1/2 hour.  Prepare Peach Glaze; spoon over\nall.  To serve, fill center of ring with desired fruit.  If desired,\npreare Creme Chantilly to spoon onto slices.\nSavarin Syrup: In a saucepan combine 1 1/2 cups peach nectar and 1/2 cup\nsugar.  Bring to a boil; remove from heat.  Stir in 1/2 cup rum.\nPeach Glaze: In a saucepan heat and stir one 12 ounce jar peach jam over\nlow heat till melted.  Strain.\nCreme Chantilly: In a mixer bowl combine 1 cup whipping cream, one\ntablespoon powdered sugar and 1 teaspoon vanilla, beat till soft peaks\nform.\nmara\nCarnegie Mellon's School of Computer Science  (SCS) graciously hosts the Recipe Archive. We invite you to learn about SCS educational programs and research.",
-    "measures" : [
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      ""
-    ],
-    "source" : "CMU Recipe Archive",
-    "title" : "Peach-Glazed Savarin"
   },
   {
     "area" : "",
@@ -38398,86 +38344,6 @@
     ],
     "source" : "CMU Recipe Archive",
     "title" : "Mama's Pralines"
-  },
-  {
-    "area" : "",
-    "category" : "",
-    "id" : "cmu-peanut-butter-balls",
-    "imageURL" : "",
-    "ingredients" : [
-      "1 c. peanut butter",
-      "1 c. powdered milk",
-      "1/2 c. honey"
-    ],
-    "instructions" : "Peanut Butter Balls\nHere is a great snack and wonderful recipe for kids:\nBlend all ingredients together (preferrably with hands).\nRoll into balls the size of large marbles and refrigerate.\nOptional:\nroll balls in powdered cocoa\n\"    \"      \" coconut\ndip into chocolate fondue\nyuummmmm\nLisa\namyl\nCarnegie Mellon's School of Computer Science  (SCS) graciously hosts the Recipe Archive. We invite you to learn about SCS educational programs and research.",
-    "measures" : [
-      "",
-      "",
-      ""
-    ],
-    "source" : "CMU Recipe Archive",
-    "title" : "Peanut Butter Balls"
-  },
-  {
-    "area" : "",
-    "category" : "",
-    "id" : "cmu-pralines",
-    "imageURL" : "",
-    "ingredients" : [
-      "1 tsp. vanilla",
-      "3/4 stick butter",
-      "3/4 cup light brown sugar",
-      "1/2 cup milk"
-    ],
-    "instructions" : "Pralines\nSomebody posted recently, asking for a recipe for Southern-style\npralines.  I spent a week this summer in New Orleans, searching for\nthe best praline, and I found it at the Louisiana General Store's\nCooking School.  Below is the recipe they gave out:\n1-1/2 cups sugar\n1-1/2 cups pecans\n1) Combine all ingredients.\n2) Bring to soft ball stage (238-240 degrees).\n3) Remove from heat and stir until mixture cools and thickens.\n4) Spoon out on buttered wax paper or aluminum foil.\nThey're also available by mail-order ($5/dozen + shipping) if you're\nfeeling lazy.  (Address:  The New Orleans School of Cooking and\nLouisiana General Store, 620 Decatur St., The Jackson Brewery,\nNew Orleans, LA  70130; phone: 1-800-237-4841)\n--Cynthia Coutts\noaiscc0@mvs.oac.ucla.edu\namyl\nCarnegie Mellon's School of Computer Science  (SCS) graciously hosts the Recipe Archive. We invite you to learn about SCS educational programs and research.",
-    "measures" : [
-      "",
-      "",
-      "",
-      ""
-    ],
-    "source" : "CMU Recipe Archive",
-    "title" : "Pralines"
-  },
-  {
-    "area" : "",
-    "category" : "",
-    "id" : "cmu-quick-candy-apple-slices",
-    "imageURL" : "",
-    "ingredients" : [
-      "1 can Eagle Brand Sweetened Condensed Milk",
-      "1 stick Butter",
-      "1 pkg Caramels"
-    ],
-    "instructions" : "Quick Candy Apple Slices\nYou will need Granny Smith or Jonathon Apples for this recipe - you\nreally need a TART apple to counter the SWEETNESS of this...\nUnwrap (1) 16oz package of caramels  - then add butter - then add\ncan milk... put in microwave for several minutes - be careful not to\nscorch... I pull mine out and stir it every so often -\nThe nice thing about this is that you can use it and then keep the\nleftovers in the frig and just reheat in microwave - it still is as\nfresh as when you made it.  The butter helps with this.\nENJOY - I usually slice my apple - however, we have been known to\ndrizzle this over popcorn - and have cream cheese on the side to serve\nwith it.  It is delicious but VERY RICH!!!!\nbonnie\namyl\nCarnegie Mellon's School of Computer Science  (SCS) graciously hosts the Recipe Archive. We invite you to learn about SCS educational programs and research.",
-    "measures" : [
-      "",
-      "",
-      ""
-    ],
-    "source" : "CMU Recipe Archive",
-    "title" : "Quick Candy Apple Slices"
-  },
-  {
-    "area" : "",
-    "category" : "",
-    "id" : "cmu-rum-balls",
-    "imageURL" : "",
-    "ingredients" : [
-      "2 Tablespoons cocoa",
-      "1 Cup finely chopped pecans or walnuts",
-      "3 Tablespoons light corn syrup",
-      "1/4 Cup rum or bourbon"
-    ],
-    "instructions" : "Rum Balls\nI got this from the EAT-L mailing list:\nHere's the long ago promised Rum Ball Recipe.  I usually make it during\nthe first week of December to give it enough time to cure.  I do mail\nsome out to friends in a tin, therefore I usually double or triple this\nrecipe:\nConfectioner's sugar\n2 1/2 Cups finely crushed vanilla wafers (most of a 12-oz box), easily\ncrushed in a food processor or blender\nInto a large bowl, sift the cocoa and 1 Cup of confectioner's sugar. Mix\nin remaining ingredients.  Form the mixture into 1-inch balls with your\nhands.  Sprinkle about 1 Cup confectioner's sugar on a plate and roll the\nballs in it to coat.  Store in a tin for at least 1 week before giving\nthem away.  These cookies will mellow with age and will keep up to 1 month.\nThey can also be wrapped in plastic wrap or foil, but this is very time\nconsuming.  Makes about 36.\nLinda Gross\nSpringfield, Va.\namyl\nCarnegie Mellon's School of Computer Science  (SCS) graciously hosts the Recipe Archive. We invite you to learn about SCS educational programs and research.",
-    "measures" : [
-      "",
-      "",
-      "",
-      ""
-    ],
-    "source" : "CMU Recipe Archive",
-    "title" : "Rum Balls"
   },
   {
     "area" : "",
@@ -41567,31 +41433,6 @@
     ],
     "source" : "CMU Recipe Archive",
     "title" : "Crockpot Meat Loaf"
-  },
-  {
-    "area" : "",
-    "category" : "",
-    "id" : "cmu-crockpot-pork-chops-with-mushroom-sauce",
-    "imageURL" : "",
-    "ingredients" : [
-      "8 to 10 small, thick porkchops",
-      "2 tsp salt",
-      "1/4 tsp pepper",
-      "1/8 tsp sage",
-      "1 can (12 oz) cream of mushroom soup",
-      "1 Tbsp dried onion flakes"
-    ],
-    "instructions" : "Crockpot Pork Chops with Mushroom Sauce\n(From The Best Of Electric Crockery Cooking)\nTrim the excess fat from the chops and use it to grease a large skillet.\nOver high heat, brown each chop lightly on both sides.  Salt and pepper\neach as it finishes and place it in the crockpot.  Add the sage.  Turn the\nsoup (undiluted) and the onion flakes into the still hot skillet.\nScrape the pan juices and turn them into the cooker.  Cover and cook\non Low for 8 to 10 hours.\nMakes 6 to 8 servings.\nmara\nCarnegie Mellon's School of Computer Science  (SCS) graciously hosts the Recipe Archive. We invite you to learn about SCS educational programs and research.",
-    "measures" : [
-      "",
-      "",
-      "",
-      "",
-      "",
-      ""
-    ],
-    "source" : "CMU Recipe Archive",
-    "title" : "Crockpot Pork Chops with Mushroom Sauce"
   },
   {
     "area" : "",
