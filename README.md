@@ -1,22 +1,28 @@
 # Recipe Manager (native macOS app)
 
-Build the app: double-click **Build Recipe Manager.app.command** (permanent app, optional
-install to /Applications) or **Launch Recipe Manager.command** (build + open).
-Needs Xcode/Command Line Tools and `gh` (`brew install gh`).
+Build: double-click **Build Recipe Manager.app.command** (permanent app, optional install to
+/Applications) or **Launch Recipe Manager.command**. Needs Xcode/Command Line Tools + `gh`.
 
 ## First run — pick your folder
-The app manages recipes.json in a WORKING FOLDER. On launch it looks for a saved folder,
-then ~/Documents/stocked-recipes. If the recipe list is empty, click **Choose Folder…** in
-the header and select your stocked-recipes folder. (This is why a double-clicked app can show
-nothing: apps launch from "/", not your repo — choosing the folder fixes it, and it's remembered.)
+Click **Choose Folder…** in the header and select your stocked-recipes folder (the one with
+recipes.json). It's remembered. (A double-clicked app starts in "/", so it can't find your
+recipes until you point it at the folder — this fixes the empty list.)
 
-## Features
-- Sidebar: searchable recipes with thumbnails; Add Recipe.
-- Feed: Rebuild, Fill Images, Validate, Add N New (only recipes not already listed).
-- Import from a GitHub repo: paste a repo URL (e.g. https://github.com/dpapathanasiou/recipes)
-  and click Import. It reads JSON recipe files directly, and does a best-effort parse of
-  plain-text/markdown recipe files. The N field caps how many to pull.
-- Drag .json files onto the window to import.
-- GitHub: Login, Connect Repo, Commit & Push, Pull, Verify, and branch Merge.
+## What's new
+- **Import many file types → JSON:** Import Files… (or drag onto the window) accepts json,
+  csv/tsv, txt, md, and html — each is converted to the recipe format. Junk/code files are
+  rejected automatically.
+- **Cleaner GitHub import:** skips code/data/binary files and oversized files, and validates
+  that each entry is actually a recipe (no more "import random" or giant blobs).
+- **Push after import:** toggle on to auto commit + push after any import.
+- **Configurable app refresh interval:** set "App refresh every N hours" and Set Interval —
+  it writes feed_config.json. Apply the included RemoteRecipeFeed.swift to the Stocked app so
+  it reads that interval instead of the fixed 6 hours.
+- **Big-file safe:** files over 45 MB are kept local and never committed (GitHub rejects
+  >100 MB / warns >50 MB). The built .app and caches are git-ignored.
+- **Pull fixed:** uses --autostash so local edits don't block a pull.
 
-Multiple custom*.json (including custom_github_<repo>.json) are merged on Rebuild.
+## Files
+- RecipeManager.swift — the app.
+- RemoteRecipeFeed.swift — DROP-IN replacement for the Stocked app (reads feed_config.json for
+  the refresh interval). Apply it to the Stocked repo, not this one.
