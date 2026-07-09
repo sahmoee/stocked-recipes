@@ -1,2 +1,6 @@
 .DS_Store
-.DS_Store
+*.app/
+.build/
+__pycache__/
+*.pyc
+custom_github_RecipeNet.json
