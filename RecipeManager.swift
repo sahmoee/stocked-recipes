@@ -347,12 +347,22 @@ final class Store: ObservableObject {
     func commitPush() {
         background("Committing & pushing…") {
             guard isGitRepo() else { DispatchQueue.main.async { self.out("Not a git repo — use Connect Repo.") }; return }
+            // Keep .DS_Store out of the repo.
+            if !FileManager.default.fileExists(atPath: ".gitignore") {
+                try? ".DS_Store\n".write(toFile: ".gitignore", atomically: true, encoding: .utf8)
+            }
             let count = loadRecipes(RECIPES_FILE).count
-            _ = runGit(["add", RECIPES_FILE, CUSTOM_FILE])
+            _ = runGit(["add", "-A"])   // stages recipes.json, custom (if present), and the tool files
             let commit = runGit(["commit", "-m", "Update recipes (\(count) total)"])
             DispatchQueue.main.async { self.out(commit.isEmpty ? "Nothing new to commit." : commit) }
             if remoteURL().isEmpty { DispatchQueue.main.async { self.out("No remote — use Connect Repo.") }; return }
-            let push = runGit(["push"])
+            // Set upstream automatically on the first push.
+            let branch = runGit(["rev-parse", "--abbrev-ref", "HEAD"])
+            let upstream = runGit(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+            let needsUpstream = upstream.isEmpty || upstream.lowercased().contains("fatal") || upstream.lowercased().contains("no upstream")
+            let push = needsUpstream
+                ? runGit(["push", "-u", "origin", branch.isEmpty ? "main" : branch])
+                : runGit(["push"])
             DispatchQueue.main.async { self.out(push.isEmpty ? "Pushed." : push) }
         }
     }
