@@ -1,18 +1,18 @@
-// RecipeManager.swift — a native macOS app (SwiftUI, @main) to manage Stocked's recipe
-// feed and its GitHub repo. Styled like BuildBuddy. Build with "Build Recipe Manager.app.command".
+// RecipeManager.swift — native macOS app (SwiftUI @main), BuildBuddy-style, to manage Stocked's
+// recipe feed and its GitHub repo. Build with "Build Recipe Manager.app.command".
 //
-// Manages recipes.json in a WORKING FOLDER you choose (remembered between launches), so it
-// works when launched as a .app (which otherwise starts in "/"). Features: rebuild from free
-// sources, add only-new by amount, add/remove customs, multiple custom*.json, drag-and-drop
-// JSON, IMPORT FROM A GITHUB REPO, fill images, validate, and full git (login/commit/push/
-// pull/merge/verify).
+// Choose a working folder (remembered). Rebuild from free sources; add only-new by amount;
+// add/remove customs; multiple custom*.json; import many file types (json/csv/txt/md/html);
+// import from a GitHub repo; REMOVE by matching a json/github/website or by missing image;
+// fill images; validate; configurable app refresh interval; full git (login/commit/push/pull/
+// merge/verify) with big-file safety.
 
 import SwiftUI
 import AppKit
 import Foundation
 import UniformTypeIdentifiers
 
-// MARK: - Model (matches the app's OnlineRecipe JSON shape exactly)
+// MARK: - Model
 
 struct Recipe: Codable, Identifiable {
     var id: String
@@ -75,12 +75,13 @@ func loadAllCustoms() -> [Recipe] {
     return all
 }
 
-// MARK: - Networking (synchronous; always called off the main thread)
-
-func fetchJSON(_ urlString: String) -> Any? {
-    guard let (data, _) = fetchData(urlString) else { return nil }
-    return try? JSONSerialization.jsonObject(with: data)
+func customJSONFiles() -> [String] {
+    let fm = FileManager.default
+    return ((try? fm.contentsOfDirectory(atPath: fm.currentDirectoryPath)) ?? [])
+        .filter { $0.lowercased().hasPrefix("custom") && $0.lowercased().hasSuffix(".json") }
 }
+
+// MARK: - Networking (synchronous; called off the main thread)
 
 func fetchData(_ urlString: String) -> (Data, HTTPURLResponse)? {
     guard let url = URL(string: urlString) else { return nil }
@@ -95,6 +96,11 @@ func fetchData(_ urlString: String) -> (Data, HTTPURLResponse)? {
     }.resume()
     _ = sem.wait(timeout: .now() + 25)
     return out
+}
+
+func fetchJSON(_ urlString: String) -> Any? {
+    guard let (data, _) = fetchData(urlString) else { return nil }
+    return try? JSONSerialization.jsonObject(with: data)
 }
 
 func fetchDummyJSON() -> [Recipe] {
@@ -138,21 +144,19 @@ func fetchMealDB(progress: (String) -> Void) -> [Recipe] {
     return out
 }
 
-// MARK: - GitHub import (any repo of recipe JSON or text files)
+// MARK: - Import parsing (many file types) + quality gate
 
-func parseOwnerRepo(_ urlString: String) -> (String, String)? {
-    guard let r = urlString.range(of: "github.com/") else { return nil }
-    let parts = urlString[r.upperBound...].split(separator: "/")
-    guard parts.count >= 2 else { return nil }
-    var repo = String(parts[1])
-    if repo.hasSuffix(".git") { repo = String(repo.dropLast(4)) }
-    return (String(parts[0]), repo)
-}
-
-func githubDefaultBranch(_ owner: String, _ repo: String) -> String {
-    if let root = fetchJSON("https://api.github.com/repos/\(owner)/\(repo)") as? [String: Any],
-       let b = root["default_branch"] as? String { return b }
-    return "main"
+func looksLikeRecipe(_ r: Recipe) -> Bool {
+    let t = r.title.lowercased()
+    let bad = ["import ", "export ", "def ", "return ", "print(", "#!/", "http://", "https://",
+               "==", "();", "np.", "std::", "lc_all", "self.", "0x", "){", "});"]
+    if bad.contains(where: { t.contains($0) }) { return false }
+    if r.title.count < 3 || r.title.count > 90 { return false }
+    if r.title.filter({ $0.isLetter }).count < 3 { return false }
+    if r.title.filter({ $0.isNumber }).count > r.title.count / 2 { return false }
+    let instr = r.instructions
+    if instr.count < 25 || instr.count > 8000 { return false }
+    return true
 }
 
 func prettifyFilename(_ path: String) -> String {
@@ -161,7 +165,6 @@ func prettifyFilename(_ path: String) -> String {
     return words.split(separator: " ").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
 }
 
-/// Best-effort parse of a plain-text/markdown recipe file (e.g. dpapathanasiou/recipes).
 func parseTextRecipe(_ text: String, path: String, repo: String) -> Recipe? {
     let lines = text.components(separatedBy: "\n")
     var title = ""
@@ -189,68 +192,6 @@ func parseTextRecipe(_ text: String, path: String, repo: String) -> Recipe? {
     return Recipe(id: "github-\(repo)-\(slug)", title: title, category: "", area: "",
                   instructions: instructions, imageURL: "", ingredients: ings,
                   measures: ings.map { _ in "" }, source: "GitHub: \(repo)")
-}
-
-func githubRecipes(repoURL: String, limit: Int?, log: @escaping (String) -> Void) -> [Recipe] {
-    guard let (owner, repo) = parseOwnerRepo(repoURL) else { log("  Invalid GitHub URL."); return [] }
-    let branch = githubDefaultBranch(owner, repo)
-    log("  \(owner)/\(repo) @ \(branch) — listing files…")
-    guard let tree = fetchJSON("https://api.github.com/repos/\(owner)/\(repo)/git/trees/\(branch)?recursive=1") as? [String: Any],
-          let nodes = tree["tree"] as? [[String: Any]] else { log("  Could not read repo tree (private or API rate-limited)."); return [] }
-
-    // Only real recipe files; skip code, data, binaries.
-    let codeExt = [".py",".ipynb",".sh",".npz",".pkl",".pickle",".h5",".bin",".dat",".model",".cfg",
-                   ".ini",".png",".jpg",".jpeg",".gif",".svg",".css",".js",".html",".htm",".yml",
-                   ".yaml",".toml",".lock",".xml",".csv",".tsv",".zip",".gz",".pdf",".map",".ppm"]
-    var paths: [String] = []
-    for n in nodes {
-        guard (n["type"] as? String) == "blob", let path = n["path"] as? String else { continue }
-        let low = path.lowercased()
-        let name = (low as NSString).lastPathComponent
-        if codeExt.contains(where: { low.hasSuffix($0) }) { continue }
-        if name.contains("license") || name.contains("readme") || name.contains("contributing")
-            || name.contains("makefile") || name.contains("requirement") || name.hasPrefix(".") { continue }
-        paths.append(path)
-    }
-    log("  \(paths.count) candidate files — fetching…")
-
-    var out: [Recipe] = []; var seen = Set<String>()
-    func addUnique(_ r: Recipe) {
-        let k = normalize(r.title)
-        guard !k.isEmpty, !seen.contains(k), looksLikeRecipe(r) else { return }
-        seen.insert(k); out.append(r)
-    }
-    for path in paths {
-        if let limit = limit, out.count >= limit { break }
-        let enc = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
-        guard let (data, http) = fetchData("https://raw.githubusercontent.com/\(owner)/\(repo)/\(branch)/\(enc)"),
-              (200..<300).contains(http.statusCode), data.count < 300_000 else { continue }
-        if path.lowercased().hasSuffix(".json") {
-            if let recs = try? JSONDecoder().decode([Recipe].self, from: data) { recs.forEach(addUnique); continue }
-            if let r = try? JSONDecoder().decode(Recipe.self, from: data) { addUnique(r); continue }
-        }
-        if let text = String(data: data, encoding: .utf8), let r = parseTextRecipe(text, path: path, repo: repo) {
-            addUnique(r)
-        }
-    }
-    return out
-}
-
-// MARK: - Import from various file types + quality gate
-
-/// Rejects code/data/junk masquerading as a recipe (import artifacts, script lines, etc.).
-func looksLikeRecipe(_ r: Recipe) -> Bool {
-    let t = r.title.lowercased()
-    let bad = ["import ", "export ", "def ", "return ", "print(", "#!/", "http://", "https://",
-               "==", "();", "np.", "std::", "lc_all", "self.", "0x", "\\\\u", "){", "});"]
-    if bad.contains(where: { t.contains($0) }) { return false }
-    if r.title.count < 3 || r.title.count > 90 { return false }
-    if r.title.filter({ $0.isLetter }).count < 3 { return false }               // mostly digits/punct
-    let digits = r.title.filter { $0.isNumber }.count
-    if digits > r.title.count / 2 { return false }
-    let instr = r.instructions
-    if instr.count < 25 || instr.count > 8000 { return false }                   // too short or absurd
-    return true
 }
 
 func stripHTML(_ s: String) -> String {
@@ -292,9 +233,8 @@ func recipesFromCSV(_ text: String) -> [Recipe] {
     return out
 }
 
-/// Reads a single file of many formats and converts to recipes: json, csv/tsv, html, txt/md/other.
 func recipesFromFile(_ url: URL) -> [Recipe] {
-    guard let data = try? Data(contentsOf: url), data.count < 8_000_000 else { return [] }   // cap 8MB
+    guard let data = try? Data(contentsOf: url), data.count < 8_000_000 else { return [] }
     let ext = url.pathExtension.lowercased()
     if ext == "json" {
         if let recs = try? JSONDecoder().decode([Recipe].self, from: data) { return recs }
@@ -306,11 +246,71 @@ func recipesFromFile(_ url: URL) -> [Recipe] {
     let body = (ext == "html" || ext == "htm") ? stripHTML(text) : text
     if var r = parseTextRecipe(body, path: url.lastPathComponent, repo: "file") {
         r.source = "Imported"
-        let slug = normalize(r.title).replacingOccurrences(of: " ", with: "-")
-        r.id = "file-\(slug)"
+        r.id = "file-\(normalize(r.title).replacingOccurrences(of: " ", with: "-"))"
         return [r]
     }
     return []
+}
+
+// MARK: - GitHub repo import
+
+func parseOwnerRepo(_ urlString: String) -> (String, String)? {
+    guard let r = urlString.range(of: "github.com/") else { return nil }
+    let parts = urlString[r.upperBound...].split(separator: "/")
+    guard parts.count >= 2 else { return nil }
+    var repo = String(parts[1])
+    if repo.hasSuffix(".git") { repo = String(repo.dropLast(4)) }
+    return (String(parts[0]), repo)
+}
+
+func githubDefaultBranch(_ owner: String, _ repo: String) -> String {
+    if let root = fetchJSON("https://api.github.com/repos/\(owner)/\(repo)") as? [String: Any],
+       let b = root["default_branch"] as? String { return b }
+    return "main"
+}
+
+func githubRecipes(repoURL: String, limit: Int?, log: @escaping (String) -> Void) -> [Recipe] {
+    guard let (owner, repo) = parseOwnerRepo(repoURL) else { log("  Invalid GitHub URL."); return [] }
+    let branch = githubDefaultBranch(owner, repo)
+    log("  \(owner)/\(repo) @ \(branch) — listing files…")
+    guard let tree = fetchJSON("https://api.github.com/repos/\(owner)/\(repo)/git/trees/\(branch)?recursive=1") as? [String: Any],
+          let nodes = tree["tree"] as? [[String: Any]] else { log("  Could not read repo tree (private or API rate-limited)."); return [] }
+
+    let codeExt = [".py",".ipynb",".sh",".npz",".pkl",".pickle",".h5",".bin",".dat",".model",".cfg",
+                   ".ini",".png",".jpg",".jpeg",".gif",".svg",".css",".js",".html",".htm",".yml",
+                   ".yaml",".toml",".lock",".xml",".csv",".tsv",".zip",".gz",".pdf",".map",".ppm"]
+    var paths: [String] = []
+    for n in nodes {
+        guard (n["type"] as? String) == "blob", let path = n["path"] as? String else { continue }
+        let low = path.lowercased()
+        let name = (low as NSString).lastPathComponent
+        if codeExt.contains(where: { low.hasSuffix($0) }) { continue }
+        if name.contains("license") || name.contains("readme") || name.contains("contributing")
+            || name.contains("makefile") || name.contains("requirement") || name.hasPrefix(".") { continue }
+        paths.append(path)
+    }
+    log("  \(paths.count) candidate files — fetching…")
+
+    var out: [Recipe] = []; var seen = Set<String>()
+    func addUnique(_ r: Recipe) {
+        let k = normalize(r.title)
+        guard !k.isEmpty, !seen.contains(k), looksLikeRecipe(r) else { return }
+        seen.insert(k); out.append(r)
+    }
+    for path in paths {
+        if let limit = limit, out.count >= limit { break }
+        let enc = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+        guard let (data, http) = fetchData("https://raw.githubusercontent.com/\(owner)/\(repo)/\(branch)/\(enc)"),
+              (200..<300).contains(http.statusCode), data.count < 300_000 else { continue }
+        if path.lowercased().hasSuffix(".json") {
+            if let recs = try? JSONDecoder().decode([Recipe].self, from: data) { recs.forEach(addUnique); continue }
+            if let r = try? JSONDecoder().decode(Recipe.self, from: data) { addUnique(r); continue }
+        }
+        if let text = String(data: data, encoding: .utf8), let r = parseTextRecipe(text, path: path, repo: repo) {
+            addUnique(r)
+        }
+    }
+    return out
 }
 
 // MARK: - Shell / git / gh
@@ -328,16 +328,15 @@ func runShell(_ cmd: String, _ args: [String]) -> String {
 }
 
 func runGit(_ args: [String]) -> String { runShell("git", args) }
+func isGitRepo() -> Bool { runGit(["rev-parse", "--is-inside-work-tree"]).contains("true") }
+func remoteURL() -> String { runGit(["config", "--get", "remote.origin.url"]) }
 
-/// Writes a sane .gitignore, keeps oversized junk out of the commit, then commits + pushes.
+/// Writes .gitignore, keeps oversized junk out, then commits + pushes (upstream-safe).
 func gitCommitPushSync(log: @escaping (String) -> Void) {
     guard isGitRepo() else { log("Not a git repo — use Connect Repo."); return }
-    // Never commit build artifacts, caches, or the app bundle.
-    let ignore = ".DS_Store\n*.app/\n.build/\n__pycache__/\n*.pyc\nfeed_config_local.json\n"
+    let ignore = ".DS_Store\n*.app/\n.build/\n__pycache__/\n*.pyc\n"
     try? ignore.write(toFile: ".gitignore", atomically: true, encoding: .utf8)
-    _ = runGit(["rm", "-r", "--cached", "--ignore-unmatch", "--quiet",
-                "RecipeManager.app", ".build", "__pycache__"])
-    // Keep files GitHub rejects (>45MB) out of the commit; leave them on disk, ignored.
+    _ = runGit(["rm", "-r", "--cached", "--ignore-unmatch", "--quiet", "RecipeManager.app", ".build", "__pycache__"])
     if let items = try? FileManager.default.contentsOfDirectory(atPath: ".") {
         for f in items {
             if let attrs = try? FileManager.default.attributesOfItem(atPath: f),
@@ -361,8 +360,6 @@ func gitCommitPushSync(log: @escaping (String) -> Void) {
     let push = needsUpstream ? runGit(["push", "-u", "origin", branch.isEmpty ? "main" : branch]) : runGit(["push"])
     log(push.isEmpty ? "Pushed." : push)
 }
-func isGitRepo() -> Bool { runGit(["rev-parse", "--is-inside-work-tree"]).contains("true") }
-func remoteURL() -> String { runGit(["config", "--get", "remote.origin.url"]) }
 
 func ghUser() -> String? {
     let s = runShell("gh", ["auth", "status"])
@@ -433,6 +430,7 @@ final class Store: ObservableObject {
     @Published var githubURL = "https://github.com/dpapathanasiou/recipes"
     @Published var refreshHours = "6"
     @Published var pushAfterImport = true
+    @Published var removeSource = ""
 
     var filtered: [Recipe] {
         guard !search.isEmpty else { return recipes }
@@ -442,11 +440,10 @@ final class Store: ObservableObject {
 
     func out(_ s: String) { log += (log.isEmpty ? "" : "\n") + s }
 
-    // Working folder — the app runs from "/" when double-clicked, so we chdir into the repo.
     func restoreFolder() {
         let saved = UserDefaults.standard.string(forKey: "workingFolder") ?? ""
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let candidates = [saved, "\(home)/Documents/stocked-recipes", FileManager.default.currentDirectoryPath]
+        let candidates = [saved, "\(home)/Documents/stocked-recipes", "\(home)/Documents/stocked-recipes-repo", FileManager.default.currentDirectoryPath]
         for c in candidates where !c.isEmpty && FileManager.default.fileExists(atPath: "\(c)/\(RECIPES_FILE)") {
             FileManager.default.changeCurrentDirectoryPath(c); folder = c; break
         }
@@ -550,9 +547,7 @@ final class Store: ObservableObject {
         }
     }
 
-    /// Imports recipes from many file types (json, csv/tsv, html, txt/md/other). Adds only new.
     func importFiles(_ urls: [URL]) {
-        let push = pushAfterImport
         background("Importing files…") {
             var feed = loadRecipes(RECIPES_FILE); let before = feed.count; var files = 0
             for url in urls {
@@ -569,11 +564,10 @@ final class Store: ObservableObject {
             _ = saveRecipes(feed, to: RECIPES_FILE)
             let added = feed.count - before
             DispatchQueue.main.async { self.out("Imported \(added) new recipe(s) from \(files) file(s).") }
-            if push && added > 0 { gitCommitPushSync { line in DispatchQueue.main.async { self.out(line) } } }
+            if self.pushAfterImport && added > 0 { gitCommitPushSync { line in DispatchQueue.main.async { self.out(line) } } }
         }
     }
 
-    /// Writes the app refresh interval (hours) to feed_config.json, which the Stocked app reads.
     func saveInterval() {
         let n = max(1, Int(refreshHours) ?? 6)
         if let data = try? JSONSerialization.data(withJSONObject: ["refreshHours": n], options: [.prettyPrinted]) {
@@ -582,18 +576,65 @@ final class Store: ObservableObject {
         }
     }
 
-    func addRecipe(_ r: Recipe) {
-        _ = saveRecipes(merge(loadRecipes(CUSTOM_FILE), [r]), to: CUSTOM_FILE)
-        let feed = merge(loadRecipes(RECIPES_FILE), [r]); _ = saveRecipes(feed, to: RECIPES_FILE)
-        reload(); out("Added \"\(r.title)\". Feed now \(recipes.count).")
+    // MARK: Remove — by matching a source, or by missing image
+
+    func removeNoImage() {
+        background("Removing recipes with no image…") {
+            var feed = loadRecipes(RECIPES_FILE); let before = feed.count
+            feed.removeAll { $0.imageURL.trimmingCharacters(in: .whitespaces).isEmpty }
+            _ = saveRecipes(feed, to: RECIPES_FILE)
+            for f in customJSONFiles() {
+                var cs = loadRecipes(f); cs.removeAll { $0.imageURL.trimmingCharacters(in: .whitespaces).isEmpty }; _ = saveRecipes(cs, to: f)
+            }
+            let removed = before - feed.count
+            let push = self.pushAfterImport
+            DispatchQueue.main.async { self.out("Removed \(removed) recipe(s) with no image. Feed now \(feed.count).") }
+            if push && removed > 0 { gitCommitPushSync { line in DispatchQueue.main.async { self.out(line) } } }
+        }
     }
 
-    func remove(_ r: Recipe) {
-        var feed = loadRecipes(RECIPES_FILE); feed.removeAll { normalize($0.title) == normalize(r.title) }
+    func removeFromSource(_ input: String) {
+        let src = input.trimmingCharacters(in: .whitespaces)
+        guard !src.isEmpty else { return }
+        background("Finding matches…") {
+            var titles = Set<String>(); var label = "source"
+            if src.lowercased().contains("github.com") {
+                let recs = githubRecipes(repoURL: src, limit: 3000) { line in DispatchQueue.main.async { self.out(line) } }
+                titles = Set(recs.map { normalize($0.title) }); label = "GitHub repo"
+            } else if let (data, http) = fetchData(src), (200..<300).contains(http.statusCode) {
+                if src.lowercased().hasSuffix(".json"), let recs = try? JSONDecoder().decode([Recipe].self, from: data) {
+                    titles = Set(recs.map { normalize($0.title) }); label = "JSON"
+                } else if let text = String(data: data, encoding: .utf8) {
+                    let pageNorm = normalize(stripHTML(text))
+                    let feed = loadRecipes(RECIPES_FILE)
+                    titles = Set(feed.map { normalize($0.title) }.filter { $0.count >= 4 && pageNorm.contains($0) })
+                    label = "website"
+                }
+            }
+            self.applyRemoval(titles, label: label)
+        }
+    }
+
+    func removeFromFile(_ urls: [URL]) {
+        background("Finding matches…") {
+            var titles = Set<String>()
+            for url in urls { titles.formUnion(recipesFromFile(url).map { normalize($0.title) }) }
+            self.applyRemoval(titles, label: "file(s)")
+        }
+    }
+
+    private func applyRemoval(_ titles: Set<String>, label: String) {
+        guard !titles.isEmpty else { DispatchQueue.main.async { self.out("No matching titles found for \(label).") }; return }
+        var feed = loadRecipes(RECIPES_FILE); let before = feed.count
+        feed.removeAll { titles.contains(normalize($0.title)) }
         _ = saveRecipes(feed, to: RECIPES_FILE)
-        var customs = loadRecipes(CUSTOM_FILE); customs.removeAll { normalize($0.title) == normalize(r.title) }
-        _ = saveRecipes(customs, to: CUSTOM_FILE)
-        reload(); out("Removed \"\(r.title)\". Feed now \(recipes.count).")
+        for f in customJSONFiles() {
+            var cs = loadRecipes(f); cs.removeAll { titles.contains(normalize($0.title)) }; _ = saveRecipes(cs, to: f)
+        }
+        let removed = before - feed.count
+        let push = self.pushAfterImport
+        DispatchQueue.main.async { self.out("Removed \(removed) recipe(s) matching \(label). Feed now \(feed.count).") }
+        if push && removed > 0 { gitCommitPushSync { line in DispatchQueue.main.async { self.out(line) } } }
     }
 
     func fillMissingImages() {
@@ -623,7 +664,22 @@ final class Store: ObservableObject {
         }
         out(problems == 0 ? "Valid — \(rs.count) recipes, no problems." : "\(problems) problem(s) found.")
         let missing = missingImageCount(rs)
-        if missing > 0 { out("\(missing) recipe(s) have no image — use Fill Images.") }
+        if missing > 0 { out("\(missing) recipe(s) have no image — use Fill Images or Remove No-Image.") }
+    }
+
+    func addRecipe(_ r: Recipe) {
+        _ = saveRecipes(merge(loadRecipes(CUSTOM_FILE), [r]), to: CUSTOM_FILE)
+        let feed = merge(loadRecipes(RECIPES_FILE), [r]); _ = saveRecipes(feed, to: RECIPES_FILE)
+        reload(); out("Added \"\(r.title)\". Feed now \(recipes.count).")
+    }
+
+    func remove(_ r: Recipe) {
+        var feed = loadRecipes(RECIPES_FILE); feed.removeAll { normalize($0.title) == normalize(r.title) }
+        _ = saveRecipes(feed, to: RECIPES_FILE)
+        for f in customJSONFiles() {
+            var cs = loadRecipes(f); cs.removeAll { normalize($0.title) == normalize(r.title) }; _ = saveRecipes(cs, to: f)
+        }
+        reload(); out("Removed \"\(r.title)\". Feed now \(recipes.count).")
     }
 
     func ghLogin() {
@@ -659,7 +715,6 @@ final class Store: ObservableObject {
 
     func pull() {
         background("Pulling…") {
-            // --autostash so local edits (e.g. recipes.json) don't block the rebase.
             let o = runGit(["pull", "--rebase", "--autostash"])
             DispatchQueue.main.async { self.out(o.isEmpty ? "Up to date." : o) }
         }
@@ -690,18 +745,18 @@ final class Store: ObservableObject {
     }
 }
 
-// MARK: - UI (styled to match BuildBuddy)
+// MARK: - UI (BuildBuddy-style)
 
 @main
 struct RecipeManagerApp: App {
     @StateObject private var store = Store()
     var body: some Scene {
         WindowGroup("Recipe Feed Manager") {
-            ContentView().environmentObject(store).frame(minWidth: 860, minHeight: 560)
+            ContentView().environmentObject(store).frame(minWidth: 900, minHeight: 600)
         }
         .windowStyle(.titleBar)
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 1120, height: 740)
+        .defaultSize(width: 1160, height: 780)
         .commands {
             CommandGroup(after: .newItem) {
                 Button("Rebuild Feed") { store.rebuild() }.keyboardShortcut("r", modifiers: [.command])
@@ -825,12 +880,14 @@ struct DetailView: View {
     var chooseFolder: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            headerCard
-            HStack(alignment: .top, spacing: 14) { feedSection; gitSection }
-            logCard
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                headerCard
+                HStack(alignment: .top, spacing: 14) { feedSection; gitSection }
+                logCard
+            }
+            .padding(16)
         }
-        .padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     var headerCard: some View {
@@ -880,7 +937,6 @@ struct DetailView: View {
                 Button("Add N New") { store.addNewFromSources(limit: Int(store.addAmount)) }
                 Text("only new").font(.caption).foregroundStyle(.secondary)
             }
-            Divider().padding(.vertical, 2)
             HStack(spacing: 8) {
                 Button("Import Files…") {
                     let panel = NSOpenPanel(); panel.canChooseFiles = true
@@ -897,13 +953,27 @@ struct DetailView: View {
                 Button("Import") { store.importGitHub(store.githubURL, limit: Int(store.addAmount)) }
             }
             Divider().padding(.vertical, 2)
+            sectionLabel("Remove", "trash")
+            HStack(spacing: 8) {
+                TextField("json url, github repo, or website", text: $store.removeSource).textFieldStyle(.roundedBorder)
+                Button("Remove Matches") { store.removeFromSource(store.removeSource) }
+            }
+            HStack(spacing: 8) {
+                Button("Remove From File…") {
+                    let panel = NSOpenPanel(); panel.canChooseFiles = true
+                    panel.canChooseDirectories = false; panel.allowsMultipleSelection = true
+                    if panel.runModal() == .OK { store.removeFromFile(panel.urls) }
+                }
+                Button("Remove No-Image", role: .destructive) { store.removeNoImage() }
+            }
+            Divider().padding(.vertical, 2)
             HStack(spacing: 8) {
                 Text("App refresh every").foregroundStyle(.secondary)
                 TextField("6", text: $store.refreshHours).frame(width: 46).textFieldStyle(.roundedBorder)
                 Text("hours").foregroundStyle(.secondary)
                 Button("Set Interval") { store.saveInterval() }
             }
-            Text("Import supports json, csv, txt, md, html. Drag files onto the window too.").font(.caption2).foregroundStyle(.secondary)
+            Text("Import & remove support json, csv, txt, md, html, GitHub, and websites. Drag files onto the window.").font(.caption2).foregroundStyle(.secondary)
         }
     }
 
@@ -934,10 +1004,9 @@ struct DetailView: View {
                     .font(.system(.caption, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled).padding(8)
             }
-            .frame(maxHeight: .infinity)
+            .frame(minHeight: 200)
             .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
         }
-        .frame(maxHeight: .infinity)
     }
 
     @ViewBuilder private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {

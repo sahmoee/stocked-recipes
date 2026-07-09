@@ -1,5 +1,4 @@
 #!/bin/bash
-# Build Recipe Manager.app — standalone permanent Mac app with icon; optional install to /Applications.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="RecipeManager"; SRC="$DIR/$APP_NAME.swift"; APP="$DIR/$APP_NAME.app"
@@ -10,7 +9,7 @@ echo "Recipe Manager — app builder"; echo "============================"
 if ! xcrun --find swiftc >/dev/null 2>&1; then echo "Installing Command Line Tools…"; xcode-select --install 2>/dev/null; exit 1; fi
 echo "Compiling (release)…"; rm -rf "$APP"; mkdir -p "$MACOS" "$RES"
 if ! xcrun swiftc -O -parse-as-library "$SRC" -o "$BIN" 2>"$DIR/build.log"; then
-  echo "Build failed:"; cat "$DIR/build.log"; echo; echo "Send the errors above to Claude."; exit 1; fi
+  echo "Build failed:"; cat "$DIR/build.log"; echo; echo "Send the errors to Claude."; exit 1; fi
 rm -f "$DIR/build.log"
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -20,9 +19,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Recipe Manager</string>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleExecutable</key><string>$APP_NAME</string>
-  <key>CFBundleIconFile</key><string>$APP_NAME</string>
-  <key>CFBundleVersion</key><string>2</string>
-  <key>CFBundleShortVersionString</key><string>1.1</string>
+  <key>CFBundleVersion</key><string>4</string>
+  <key>CFBundleShortVersionString</key><string>1.3</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>

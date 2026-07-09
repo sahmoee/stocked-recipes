@@ -3,4 +3,3 @@
 .build/
 __pycache__/
 *.pyc
-custom_github_RecipeNet.json
