@@ -1,17 +1,16 @@
-// RecipeManager.swift — a single-file macOS GUI app to manage Stocked's recipe feed
-// and its GitHub repo. Like BuildBuddy: a real window with buttons.
+// RecipeManager.swift — a native macOS app (SwiftUI, @main) to manage Stocked's recipe
+// feed and its GitHub repo. Styled like BuildBuddy. Build with "Build Recipe Manager.app.command".
 //
-// RUN IT (from the folder that holds recipes.json — your stocked-recipes repo):
-//     swift RecipeManager.swift
-// or double-click "Launch Recipe Manager.command".
-//
-// Features: rebuild the feed from free sources, add/remove custom recipes, validate,
-// log in to GitHub (gh), create/connect the repo, verify everything is correct, and
-// commit + push — all from the window.
+// Manages recipes.json in a WORKING FOLDER you choose (remembered between launches), so it
+// works when launched as a .app (which otherwise starts in "/"). Features: rebuild from free
+// sources, add only-new by amount, add/remove customs, multiple custom*.json, drag-and-drop
+// JSON, IMPORT FROM A GITHUB REPO, fill images, validate, and full git (login/commit/push/
+// pull/merge/verify).
 
 import SwiftUI
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 // MARK: - Model (matches the app's OnlineRecipe JSON shape exactly)
 
@@ -38,6 +37,7 @@ func loadRecipes(_ path: String) -> [Recipe] {
     return (try? JSONDecoder().decode([Recipe].self, from: data)) ?? []
 }
 
+@discardableResult
 func saveRecipes(_ recipes: [Recipe], to path: String) -> Bool {
     let enc = JSONEncoder()
     enc.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes, .sortedKeys]
@@ -65,21 +65,36 @@ func merge(_ base: [Recipe], _ incoming: [Recipe]) -> [Recipe] {
     return out
 }
 
+func loadAllCustoms() -> [Recipe] {
+    let fm = FileManager.default
+    let files = ((try? fm.contentsOfDirectory(atPath: fm.currentDirectoryPath)) ?? []).sorted()
+    var all: [Recipe] = []
+    for f in files where f.lowercased().hasPrefix("custom") && f.lowercased().hasSuffix(".json") {
+        all = merge(all, loadRecipes(f))
+    }
+    return all
+}
+
 // MARK: - Networking (synchronous; always called off the main thread)
 
 func fetchJSON(_ urlString: String) -> Any? {
+    guard let (data, _) = fetchData(urlString) else { return nil }
+    return try? JSONSerialization.jsonObject(with: data)
+}
+
+func fetchData(_ urlString: String) -> (Data, HTTPURLResponse)? {
     guard let url = URL(string: urlString) else { return nil }
     let sem = DispatchSemaphore(value: 0)
-    var result: Any?
+    var out: (Data, HTTPURLResponse)?
     var req = URLRequest(url: url)
     req.setValue("stocked-recipe-manager", forHTTPHeaderField: "User-Agent")
     req.timeoutInterval = 20
-    URLSession.shared.dataTask(with: req) { data, _, _ in
-        if let data = data { result = try? JSONSerialization.jsonObject(with: data) }
+    URLSession.shared.dataTask(with: req) { data, resp, _ in
+        if let data = data, let http = resp as? HTTPURLResponse { out = (data, http) }
         sem.signal()
     }.resume()
     _ = sem.wait(timeout: .now() + 25)
-    return result
+    return out
 }
 
 func fetchDummyJSON() -> [Recipe] {
@@ -123,6 +138,100 @@ func fetchMealDB(progress: (String) -> Void) -> [Recipe] {
     return out
 }
 
+// MARK: - GitHub import (any repo of recipe JSON or text files)
+
+func parseOwnerRepo(_ urlString: String) -> (String, String)? {
+    guard let r = urlString.range(of: "github.com/") else { return nil }
+    let parts = urlString[r.upperBound...].split(separator: "/")
+    guard parts.count >= 2 else { return nil }
+    var repo = String(parts[1])
+    if repo.hasSuffix(".git") { repo = String(repo.dropLast(4)) }
+    return (String(parts[0]), repo)
+}
+
+func githubDefaultBranch(_ owner: String, _ repo: String) -> String {
+    if let root = fetchJSON("https://api.github.com/repos/\(owner)/\(repo)") as? [String: Any],
+       let b = root["default_branch"] as? String { return b }
+    return "main"
+}
+
+func prettifyFilename(_ path: String) -> String {
+    let base = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+    let words = base.replacingOccurrences(of: "-", with: " ").replacingOccurrences(of: "_", with: " ")
+    return words.split(separator: " ").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+}
+
+/// Best-effort parse of a plain-text/markdown recipe file (e.g. dpapathanasiou/recipes).
+func parseTextRecipe(_ text: String, path: String, repo: String) -> Recipe? {
+    let lines = text.components(separatedBy: "\n")
+    var title = ""
+    for l in lines {
+        let t = l.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty { continue }
+        title = t.replacingOccurrences(of: "#", with: "").trimmingCharacters(in: .whitespaces)
+        break
+    }
+    if title.isEmpty || title.count > 90 { title = prettifyFilename(path) }
+
+    var ings: [String] = []; var instr: [String] = []; var mode = 0
+    for l in lines {
+        let t = l.trimmingCharacters(in: .whitespaces)
+        let low = t.lowercased()
+        if t.isEmpty { continue }
+        if low.contains("ingredient") && t.count < 40 { mode = 1; continue }
+        if (low.contains("direction") || low.contains("instruction") || low.contains("method") || low.contains("preparation")) && t.count < 40 { mode = 2; continue }
+        let clean = t.replacingOccurrences(of: "- ", with: "").replacingOccurrences(of: "* ", with: "")
+        if mode == 1 { ings.append(clean) } else { instr.append(clean) }
+    }
+    let instructions = instr.joined(separator: "\n")
+    guard !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+    let slug = normalize(title).replacingOccurrences(of: " ", with: "-")
+    return Recipe(id: "github-\(repo)-\(slug)", title: title, category: "", area: "",
+                  instructions: instructions, imageURL: "", ingredients: ings,
+                  measures: ings.map { _ in "" }, source: "GitHub: \(repo)")
+}
+
+func githubRecipes(repoURL: String, limit: Int?, log: @escaping (String) -> Void) -> [Recipe] {
+    guard let (owner, repo) = parseOwnerRepo(repoURL) else { log("  Invalid GitHub URL."); return [] }
+    let branch = githubDefaultBranch(owner, repo)
+    log("  \(owner)/\(repo) @ \(branch) — listing files…")
+    guard let tree = fetchJSON("https://api.github.com/repos/\(owner)/\(repo)/git/trees/\(branch)?recursive=1") as? [String: Any],
+          let nodes = tree["tree"] as? [[String: Any]] else { log("  Could not read repo tree (private or API rate-limited)."); return [] }
+
+    let skip = [".png", ".jpg", ".jpeg", ".gif", ".svg", ".css", ".js", ".html", ".yml", ".yaml", ".toml", ".lock", ".xml"]
+    var paths: [String] = []
+    for n in nodes {
+        guard (n["type"] as? String) == "blob", let path = n["path"] as? String else { continue }
+        let low = path.lowercased()
+        if skip.contains(where: { low.hasSuffix($0) }) { continue }
+        if low.contains("license") || low.contains("readme") || low.contains("contributing") || low.hasPrefix(".") { continue }
+        paths.append(path)
+    }
+    log("  \(paths.count) candidate files — fetching…")
+
+    var out: [Recipe] = []; var seen = Set<String>()
+    func addUnique(_ r: Recipe) {
+        let k = normalize(r.title)
+        guard !k.isEmpty, !seen.contains(k),
+              !r.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        seen.insert(k); out.append(r)
+    }
+    for path in paths {
+        if let limit = limit, out.count >= limit { break }
+        let enc = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+        guard let (data, http) = fetchData("https://raw.githubusercontent.com/\(owner)/\(repo)/\(branch)/\(enc)"),
+              (200..<300).contains(http.statusCode) else { continue }
+        if path.lowercased().hasSuffix(".json") {
+            if let recs = try? JSONDecoder().decode([Recipe].self, from: data) { recs.forEach(addUnique); continue }
+            if let r = try? JSONDecoder().decode(Recipe.self, from: data) { addUnique(r); continue }
+        }
+        if let text = String(data: data, encoding: .utf8), let r = parseTextRecipe(text, path: path, repo: repo) {
+            addUnique(r)
+        }
+    }
+    return out
+}
+
 // MARK: - Shell / git / gh
 
 @discardableResult
@@ -143,11 +252,9 @@ func remoteURL() -> String { runGit(["config", "--get", "remote.origin.url"]) }
 
 func ghUser() -> String? {
     let s = runShell("gh", ["auth", "status"])
-    // gh prints e.g. "Logged in to github.com account sahmoee (...)"
     if let r = s.range(of: "account ") {
         let tail = s[r.upperBound...]
-        let name = tail.split(whereSeparator: { $0 == " " || $0 == "\n" }).first.map(String.init)
-        if let name = name, !name.isEmpty { return name }
+        if let name = tail.split(whereSeparator: { $0 == " " || $0 == "\n" }).first.map(String.init), !name.isEmpty { return name }
     }
     if s.lowercased().contains("logged in") { return "connected" }
     return nil
@@ -161,7 +268,7 @@ func rawFeedURL() -> String? {
     return "https://raw.githubusercontent.com/\(String(url[r.upperBound...]))/main/\(RECIPES_FILE)"
 }
 
-// MARK: - Image resolution (free, no key): TheMealDB by name, then a category food photo
+// MARK: - Image resolution (free, no key)
 
 func foodishCategory(title: String, category: String) -> String? {
     let t = (title + " " + category).lowercased()
@@ -175,8 +282,6 @@ func foodishCategory(title: String, category: String) -> String? {
     return nil
 }
 
-/// Returns an image URL for a recipe, or nil. TheMealDB dish photo first, then a
-/// category-matched food photo. Never returns a random unrelated photo.
 func resolveImage(title: String, category: String) -> String? {
     if let q = title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
        let root = fetchJSON("https://www.themealdb.com/api/json/v1/1/search.php?s=\(q)") as? [String: Any],
@@ -201,13 +306,17 @@ func missingImageCount(_ rs: [Recipe]) -> Int {
 @MainActor
 final class Store: ObservableObject {
     @Published var recipes: [Recipe] = []
-    @Published var log: String = ""
+    @Published var log = ""
     @Published var busy = false
     @Published var busyLabel = ""
-    @Published var gh: String = "checking…"
-    @Published var remote: String = ""
-    @Published var feedURL: String = ""
+    @Published var gh = "checking…"
+    @Published var remote = ""
+    @Published var feedURL = ""
     @Published var search = ""
+    @Published var addAmount = "100"
+    @Published var currentBranch = ""
+    @Published var folder = ""
+    @Published var githubURL = "https://github.com/dpapathanasiou/recipes"
 
     var filtered: [Recipe] {
         guard !search.isEmpty else { return recipes }
@@ -217,10 +326,31 @@ final class Store: ObservableObject {
 
     func out(_ s: String) { log += (log.isEmpty ? "" : "\n") + s }
 
+    // Working folder — the app runs from "/" when double-clicked, so we chdir into the repo.
+    func restoreFolder() {
+        let saved = UserDefaults.standard.string(forKey: "workingFolder") ?? ""
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [saved, "\(home)/Documents/stocked-recipes", FileManager.default.currentDirectoryPath]
+        for c in candidates where !c.isEmpty && FileManager.default.fileExists(atPath: "\(c)/\(RECIPES_FILE)") {
+            FileManager.default.changeCurrentDirectoryPath(c); folder = c; break
+        }
+        if folder.isEmpty { folder = FileManager.default.currentDirectoryPath }
+    }
+
+    func setFolder(_ path: String) {
+        guard !path.isEmpty else { return }
+        FileManager.default.changeCurrentDirectoryPath(path)
+        folder = path
+        UserDefaults.standard.set(path, forKey: "workingFolder")
+        out("Working folder: \(path)")
+        reload(); refreshStatus()
+    }
+
     func reload() {
         recipes = loadRecipes(RECIPES_FILE)
         remote = remoteURL()
         feedURL = rawFeedURL() ?? ""
+        currentBranch = isGitRepo() ? runGit(["rev-parse", "--abbrev-ref", "HEAD"]) : ""
     }
 
     func refreshStatus() {
@@ -229,12 +359,11 @@ final class Store: ObservableObject {
             DispatchQueue.main.async {
                 self.gh = u ?? "not logged in"
                 self.reload()
-                self.out("Status: GitHub \(self.gh), remote \(self.remote.isEmpty ? "(none)" : self.remote)")
+                self.out("Folder \(self.folder) · \(self.recipes.count) recipes · GitHub \(self.gh)")
             }
         }
     }
 
-    /// Runs blocking work off-main, then reloads on completion.
     private func background(_ label: String, _ work: @escaping () -> Void) {
         busy = true; busyLabel = label
         DispatchQueue.global(qos: .userInitiated).async {
@@ -246,11 +375,10 @@ final class Store: ObservableObject {
     func rebuild() {
         background("Rebuilding feed…") {
             DispatchQueue.main.async { self.out("Rebuilding from free sources + your customs…") }
-            var recipes = loadRecipes(CUSTOM_FILE)
+            var recipes = loadAllCustoms()
             recipes = merge(recipes, fetchDummyJSON())
             DispatchQueue.main.async { self.out("  DummyJSON merged (\(recipes.count))") }
             recipes = merge(recipes, fetchMealDB { line in DispatchQueue.main.async { self.out(line) } })
-            // Fill any recipes that arrived without an image.
             var filled = 0
             for i in recipes.indices where recipes[i].imageURL.trimmingCharacters(in: .whitespaces).isEmpty {
                 if let url = resolveImage(title: recipes[i].title, category: recipes[i].category) { recipes[i].imageURL = url; filled += 1 }
@@ -263,26 +391,91 @@ final class Store: ObservableObject {
         }
     }
 
+    func addNewFromSources(limit: Int?) {
+        background("Adding new recipes…") {
+            let existing = Set(loadRecipes(RECIPES_FILE).map { normalize($0.title) })
+            DispatchQueue.main.async { self.out("Fetching sources for new recipes…") }
+            var pool = fetchDummyJSON()
+            pool += fetchMealDB { line in DispatchQueue.main.async { self.out(line) } }
+            var seen = existing; var newOnes: [Recipe] = []
+            for rec in pool {
+                let k = normalize(rec.title)
+                guard !k.isEmpty, !seen.contains(k),
+                      !rec.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                seen.insert(k)
+                var r2 = rec
+                if r2.imageURL.isEmpty, let url = resolveImage(title: r2.title, category: r2.category) { r2.imageURL = url }
+                newOnes.append(r2)
+                if let limit = limit, newOnes.count >= limit { break }
+            }
+            var feed = loadRecipes(RECIPES_FILE); feed += newOnes
+            _ = saveRecipes(feed, to: RECIPES_FILE)
+            DispatchQueue.main.async { self.out("Added \(newOnes.count) NEW recipe(s). Feed now \(feed.count).") }
+        }
+    }
+
+    func importGitHub(_ url: String, limit: Int?) {
+        background("Importing from GitHub…") {
+            var recs = githubRecipes(repoURL: url, limit: limit) { line in DispatchQueue.main.async { self.out(line) } }
+            for i in recs.indices where recs[i].imageURL.isEmpty {
+                if let u = resolveImage(title: recs[i].title, category: recs[i].category) { recs[i].imageURL = u }
+            }
+            var feed = loadRecipes(RECIPES_FILE); let before = feed.count
+            feed = merge(feed, recs)
+            _ = saveRecipes(feed, to: RECIPES_FILE)
+            let repo = parseOwnerRepo(url)?.1 ?? "import"
+            _ = saveRecipes(merge(loadRecipes("custom_github_\(repo).json"), recs), to: "custom_github_\(repo).json")
+            DispatchQueue.main.async { self.out("Imported \(feed.count - before) new recipe(s) from GitHub. Feed now \(feed.count).") }
+        }
+    }
+
+    func importJSON(_ urls: [URL]) {
+        background("Importing JSON…") {
+            var feed = loadRecipes(RECIPES_FILE); let before = feed.count; var files = 0
+            for url in urls where url.pathExtension.lowercased() == "json" {
+                let recs = loadRecipes(url.path)
+                guard !recs.isEmpty else { continue }
+                files += 1; feed = merge(feed, recs)
+                let name = "custom_" + url.deletingPathExtension().lastPathComponent.replacingOccurrences(of: " ", with: "_") + ".json"
+                _ = saveRecipes(merge(loadRecipes(name), recs), to: name)
+                DispatchQueue.main.async { self.out("  \(url.lastPathComponent): \(recs.count) recipe(s)") }
+            }
+            _ = saveRecipes(feed, to: RECIPES_FILE)
+            DispatchQueue.main.async { self.out("Imported \(feed.count - before) new recipe(s) from \(files) file(s).") }
+        }
+    }
+
     func addRecipe(_ r: Recipe) {
-        var customs = merge(loadRecipes(CUSTOM_FILE), [r]); _ = saveRecipes(customs, to: CUSTOM_FILE)
-        var feed = merge(loadRecipes(RECIPES_FILE), [r]); _ = saveRecipes(feed, to: RECIPES_FILE)
-        customs.removeAll(); feed.removeAll()
-        reload(); out("Added \"\(r.title)\". Feed now has \(recipes.count).")
+        _ = saveRecipes(merge(loadRecipes(CUSTOM_FILE), [r]), to: CUSTOM_FILE)
+        let feed = merge(loadRecipes(RECIPES_FILE), [r]); _ = saveRecipes(feed, to: RECIPES_FILE)
+        reload(); out("Added \"\(r.title)\". Feed now \(recipes.count).")
     }
 
     func remove(_ r: Recipe) {
-        var feed = loadRecipes(RECIPES_FILE)
-        feed.removeAll { normalize($0.title) == normalize(r.title) }
+        var feed = loadRecipes(RECIPES_FILE); feed.removeAll { normalize($0.title) == normalize(r.title) }
         _ = saveRecipes(feed, to: RECIPES_FILE)
-        var customs = loadRecipes(CUSTOM_FILE)
-        customs.removeAll { normalize($0.title) == normalize(r.title) }
+        var customs = loadRecipes(CUSTOM_FILE); customs.removeAll { normalize($0.title) == normalize(r.title) }
         _ = saveRecipes(customs, to: CUSTOM_FILE)
-        reload(); out("Removed \"\(r.title)\". Feed now has \(recipes.count).")
+        reload(); out("Removed \"\(r.title)\". Feed now \(recipes.count).")
+    }
+
+    func fillMissingImages() {
+        background("Filling images…") {
+            var rs = loadRecipes(RECIPES_FILE); var filled = 0
+            for i in rs.indices where rs[i].imageURL.trimmingCharacters(in: .whitespaces).isEmpty {
+                let t = rs[i].title
+                if let url = resolveImage(title: rs[i].title, category: rs[i].category) {
+                    rs[i].imageURL = url; filled += 1
+                    DispatchQueue.main.async { self.out("  + \(t)") }
+                }
+            }
+            _ = saveRecipes(rs, to: RECIPES_FILE)
+            DispatchQueue.main.async { self.out("Filled \(filled) image(s). Remaining without image: \(missingImageCount(rs)).") }
+        }
     }
 
     func validate() {
-        let rs = loadRecipes(RECIPES_FILE)
-        var problems = 0; var seen = Set<String>()
+        let rs = loadRecipes(RECIPES_FILE); var problems = 0; var seen = Set<String>()
         for (i, r) in rs.enumerated() {
             if r.title.trimmingCharacters(in: .whitespaces).isEmpty { out("  #\(i): empty title"); problems += 1 }
             if r.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out("  #\(i) \(r.title): no steps"); problems += 1 }
@@ -296,31 +489,8 @@ final class Store: ObservableObject {
         if missing > 0 { out("\(missing) recipe(s) have no image — use Fill Images.") }
     }
 
-    func fillMissingImages() {
-        background("Filling images…") {
-            var rs = loadRecipes(RECIPES_FILE)
-            var filled = 0
-            for i in rs.indices where rs[i].imageURL.trimmingCharacters(in: .whitespaces).isEmpty {
-                let t = rs[i].title
-                if let url = resolveImage(title: rs[i].title, category: rs[i].category) {
-                    rs[i].imageURL = url; filled += 1
-                    DispatchQueue.main.async { self.out("  + \(t)") }
-                }
-            }
-            _ = saveRecipes(rs, to: RECIPES_FILE)
-            // Keep customs in sync so re-added recipes keep their found image.
-            var customs = loadRecipes(CUSTOM_FILE)
-            for i in customs.indices where customs[i].imageURL.trimmingCharacters(in: .whitespaces).isEmpty {
-                if let url = resolveImage(title: customs[i].title, category: customs[i].category) { customs[i].imageURL = url }
-            }
-            _ = saveRecipes(customs, to: CUSTOM_FILE)
-            DispatchQueue.main.async { self.out("Filled \(filled) missing image(s). Remaining without image: \(missingImageCount(rs)).") }
-        }
-    }
-
     func ghLogin() {
-        out("Opening a Terminal window for GitHub login… complete it there, then press Verify.")
-        // gh auth login is interactive, so run it in Terminal.
+        out("Opening a Terminal for GitHub login — finish it there, then press Verify.")
         runShell("osascript", ["-e", "tell application \"Terminal\" to activate",
                                "-e", "tell application \"Terminal\" to do script \"gh auth login\""])
     }
@@ -347,22 +517,18 @@ final class Store: ObservableObject {
     func commitPush() {
         background("Committing & pushing…") {
             guard isGitRepo() else { DispatchQueue.main.async { self.out("Not a git repo — use Connect Repo.") }; return }
-            // Keep .DS_Store out of the repo.
             if !FileManager.default.fileExists(atPath: ".gitignore") {
                 try? ".DS_Store\n".write(toFile: ".gitignore", atomically: true, encoding: .utf8)
             }
             let count = loadRecipes(RECIPES_FILE).count
-            _ = runGit(["add", "-A"])   // stages recipes.json, custom (if present), and the tool files
+            _ = runGit(["add", "-A"])
             let commit = runGit(["commit", "-m", "Update recipes (\(count) total)"])
             DispatchQueue.main.async { self.out(commit.isEmpty ? "Nothing new to commit." : commit) }
             if remoteURL().isEmpty { DispatchQueue.main.async { self.out("No remote — use Connect Repo.") }; return }
-            // Set upstream automatically on the first push.
             let branch = runGit(["rev-parse", "--abbrev-ref", "HEAD"])
             let upstream = runGit(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
             let needsUpstream = upstream.isEmpty || upstream.lowercased().contains("fatal") || upstream.lowercased().contains("no upstream")
-            let push = needsUpstream
-                ? runGit(["push", "-u", "origin", branch.isEmpty ? "main" : branch])
-                : runGit(["push"])
+            let push = needsUpstream ? runGit(["push", "-u", "origin", branch.isEmpty ? "main" : branch]) : runGit(["push"])
             DispatchQueue.main.async { self.out(push.isEmpty ? "Pushed." : push) }
         }
     }
@@ -374,12 +540,24 @@ final class Store: ObservableObject {
         }
     }
 
+    func mergeBranch(_ name: String) {
+        let branch = name.trimmingCharacters(in: .whitespaces)
+        guard !branch.isEmpty else { return }
+        background("Merging \(branch)…") {
+            guard isGitRepo() else { DispatchQueue.main.async { self.out("Not a git repo.") }; return }
+            let branches = runGit(["branch", "--all"])
+            DispatchQueue.main.async { self.out("Branches:\n\(branches)") }
+            let o = runGit(["merge", "--no-edit", branch])
+            DispatchQueue.main.async { self.out(o.isEmpty ? "Merged \(branch)." : o) }
+        }
+    }
+
     func verify() {
         background("Verifying…") {
-            var lines = ["── Verify ──"]
-            lines.append(FileManager.default.fileExists(atPath: RECIPES_FILE) ? "✓ recipes.json present (\(loadRecipes(RECIPES_FILE).count))" : "✗ recipes.json missing")
+            var lines = ["── Verify ──", "Folder: \(self.folder)"]
+            lines.append(FileManager.default.fileExists(atPath: RECIPES_FILE) ? "✓ recipes.json present (\(loadRecipes(RECIPES_FILE).count))" : "✗ recipes.json missing — Choose Folder")
             lines.append(isGitRepo() ? "✓ git repo" : "✗ not a git repo (use Connect Repo)")
-            lines.append(ghUser() != nil ? "✓ GitHub logged in (\(ghUser() ?? ""))" : "✗ GitHub not logged in (use GitHub Login)")
+            lines.append(ghUser() != nil ? "✓ GitHub logged in (\(ghUser() ?? ""))" : "✗ GitHub not logged in (use Login)")
             lines.append(remoteURL().isEmpty ? "✗ no remote set" : "✓ remote: \(remoteURL())")
             if let raw = rawFeedURL() { lines.append("→ feed URL: \(raw)") }
             DispatchQueue.main.async { lines.forEach { self.out($0) } }
@@ -387,120 +565,285 @@ final class Store: ObservableObject {
     }
 }
 
-// MARK: - Views
+// MARK: - UI (styled to match BuildBuddy)
+
+@main
+struct RecipeManagerApp: App {
+    @StateObject private var store = Store()
+    var body: some Scene {
+        WindowGroup("Recipe Feed Manager") {
+            ContentView().environmentObject(store).frame(minWidth: 860, minHeight: 560)
+        }
+        .windowStyle(.titleBar)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 1120, height: 740)
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("Rebuild Feed") { store.rebuild() }.keyboardShortcut("r", modifiers: [.command])
+                Button("Add New From Sources") { store.addNewFromSources(limit: Int(store.addAmount)) }.keyboardShortcut("n", modifiers: [.command])
+                Button("Commit & Push") { store.commitPush() }.keyboardShortcut("p", modifiers: [.command, .shift])
+                Button("Pull") { store.pull() }.keyboardShortcut("l", modifiers: [.command])
+            }
+        }
+    }
+}
 
 struct ContentView: View {
-    @StateObject var store = Store()
-    @State private var showAdd = false
+    @EnvironmentObject var store: Store
+    @State private var branchToMerge = ""
     @State private var repoName = "stocked-recipes"
+    @State private var showAdd = false
+
+    var body: some View {
+        NavigationSplitView {
+            Sidebar(showAdd: $showAdd).navigationSplitViewColumnWidth(min: 250, ideal: 320, max: 460)
+        } detail: {
+            DetailView(branchToMerge: $branchToMerge, repoName: $repoName, chooseFolder: chooseFolder)
+        }
+        .tint(.accentColor)
+        .onAppear { store.restoreFolder(); store.reload(); store.refreshStatus() }
+        .sheet(isPresented: $showAdd) { AddRecipeSheet { store.addRecipe($0) } }
+        .onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in handleDrop(providers); return true }
+        .overlay(alignment: .top) {
+            if store.busy {
+                HStack(spacing: 10) { ProgressView().controlSize(.small); Text(store.busyLabel).font(.callout) }
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(.tint.opacity(0.4), lineWidth: 1))
+                    .padding(.top, 10)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: store.busy)
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
+        panel.title = "Choose your stocked-recipes folder (with recipes.json)"
+        if panel.runModal() == .OK, let url = panel.url { store.setFolder(url.path) }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) {
+        var urls: [URL] = []
+        let group = DispatchGroup()
+        for pr in providers {
+            group.enter()
+            _ = pr.loadObject(ofClass: URL.self) { url, _ in
+                if let url = url, url.pathExtension.lowercased() == "json" { urls.append(url) }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) { if !urls.isEmpty { store.importJSON(urls) } }
+    }
+}
+
+struct Sidebar: View {
+    @EnvironmentObject var store: Store
+    @Binding var showAdd: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
-            HSplitView {
-                listPane.frame(minWidth: 320)
-                logPane.frame(minWidth: 360)
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.caption)
+                TextField("Search recipes", text: $store.search).textFieldStyle(.plain).font(.callout)
+                if !store.search.isEmpty {
+                    Button { store.search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.borderless).foregroundStyle(.secondary)
+                }
             }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
+
+            List {
+                Section("\(store.filtered.count) recipes") { ForEach(store.filtered) { r in row(r) } }
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+
+            Divider()
+            HStack(spacing: 8) {
+                Button { showAdd = true } label: { Label("Add Recipe", systemImage: "plus.circle.fill") }
+                    .buttonStyle(.borderless)
+                Spacer()
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
         }
-        .frame(minWidth: 860, minHeight: 560)
-        .onAppear { store.reload(); store.refreshStatus() }
-        .sheet(isPresented: $showAdd) { AddRecipeSheet { store.addRecipe($0) } }
-        .overlay { if store.busy { busyOverlay } }
+        .background(.regularMaterial)
     }
 
-    var header: some View {
+    @ViewBuilder private func row(_ r: Recipe) -> some View {
+        HStack(spacing: 10) {
+            AsyncImage(url: URL(string: r.imageURL)) { phase in
+                switch phase {
+                case .success(let img): img.resizable().aspectRatio(contentMode: .fill)
+                default: ZStack { Color.gray.opacity(0.12); Image(systemName: "photo").font(.caption).foregroundStyle(.secondary) }
+                }
+            }
+            .frame(width: 40, height: 40).clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(r.title).fontWeight(.medium).lineLimit(1)
+                Text([r.area, r.category].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            Button(role: .destructive) { store.remove(r) } label: { Image(systemName: "trash") }
+                .buttonStyle(.borderless).foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+struct DetailView: View {
+    @EnvironmentObject var store: Store
+    @Binding var branchToMerge: String
+    @Binding var repoName: String
+    var chooseFolder: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            headerCard
+            HStack(alignment: .top, spacing: 14) { feedSection; gitSection }
+            logCard
+        }
+        .padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    var headerCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
+                Image(systemName: "fork.knife.circle.fill").font(.system(size: 22)).foregroundStyle(.tint)
                 Text("Recipe Feed Manager").font(.title2.bold())
                 Spacer()
-                chip("Recipes", "\(store.recipes.count)")
-                chip("GitHub", store.gh)
+                chip("Recipes", "\(store.recipes.count)", "list.bullet")
+                chip("GitHub", store.gh, "person.crop.circle")
+                chip("Branch", store.currentBranch.isEmpty ? "—" : store.currentBranch, "arrow.triangle.branch")
             }
-            HStack(spacing: 8) {
-                Button("Rebuild") { store.rebuild() }
-                Button("Add Recipe") { showAdd = true }
-                Button("Validate") { store.validate() }
-                Button("Fill Images") { store.fillMissingImages() }
-                Divider().frame(height: 16)
-                Button("GitHub Login") { store.ghLogin() }
-                TextField("repo name", text: $repoName).frame(width: 130)
-                Button("Connect Repo") { store.connectRepo(name: repoName) }
-                Button("Commit & Push") { store.commitPush() }
-                Button("Pull") { store.pull() }
-                Button("Verify") { store.verify() }
-            }.disabled(store.busy)
+            HStack(spacing: 6) {
+                Image(systemName: "folder").font(.caption).foregroundStyle(.secondary)
+                Text(store.folder.isEmpty ? "No folder chosen" : store.folder)
+                    .font(.caption.monospaced()).lineLimit(1).truncationMode(.middle)
+                Button("Choose Folder…") { chooseFolder() }.controlSize(.small)
+                Spacer()
+            }
             if !store.feedURL.isEmpty {
                 HStack(spacing: 6) {
-                    Text("Feed URL:").foregroundStyle(.secondary).font(.caption)
-                    Text(store.feedURL).font(.caption.monospaced()).textSelection(.enabled).lineLimit(1)
-                    Button("Copy") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(store.feedURL, forType: .string)
-                    }.controlSize(.small)
+                    Image(systemName: "link").font(.caption).foregroundStyle(.secondary)
+                    Text(store.feedURL).font(.caption.monospaced()).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Button {
+                        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(store.feedURL, forType: .string)
+                    } label: { Label("Copy", systemImage: "doc.on.doc") }.controlSize(.small)
                 }
             }
-        }.padding(14)
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(nsColor: .controlBackgroundColor).opacity(0.6)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.06), lineWidth: 1))
     }
 
-    var listPane: some View {
-        VStack(spacing: 0) {
-            TextField("Search recipes…", text: $store.search).textFieldStyle(.roundedBorder).padding(8)
-            List {
-                ForEach(store.filtered) { r in
-                    HStack(spacing: 10) {
-                        AsyncImage(url: URL(string: r.imageURL)) { phase in
-                            switch phase {
-                            case .success(let img): img.resizable().aspectRatio(contentMode: .fill)
-                            default: ZStack { Color.gray.opacity(0.15); Image(systemName: "photo").foregroundStyle(.secondary) }
-                            }
-                        }
-                        .frame(width: 46, height: 46)
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(r.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                            Text("\(r.area) · \(r.category) · \(r.source)").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer()
-                        Button(role: .destructive) { store.remove(r) } label: { Image(systemName: "trash") }
-                            .buttonStyle(.borderless)
-                    }
-                }
+    var feedSection: some View {
+        card {
+            sectionLabel("Feed", "sparkles")
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ActionButton("Rebuild", "arrow.triangle.2.circlepath") { store.rebuild() }
+                ActionButton("Fill Images", "photo.on.rectangle") { store.fillMissingImages() }
+                ActionButton("Validate", "checkmark.seal", tint: .green) { store.validate() }
+            }
+            HStack(spacing: 8) {
+                Text("Add").foregroundStyle(.secondary)
+                TextField("N", text: $store.addAmount).frame(width: 56).textFieldStyle(.roundedBorder)
+                Button("Add N New") { store.addNewFromSources(limit: Int(store.addAmount)) }
+                Text("only new").font(.caption).foregroundStyle(.secondary)
+            }
+            Divider().padding(.vertical, 2)
+            Text("Import from a GitHub repo").font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                TextField("https://github.com/owner/repo", text: $store.githubURL).textFieldStyle(.roundedBorder)
+                Button("Import") { store.importGitHub(store.githubURL, limit: Int(store.addAmount)) }
+            }
+            Text("Uses the amount N as a cap. Drag .json files onto the window too.").font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    var gitSection: some View {
+        card {
+            sectionLabel("GitHub", "cloud")
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ActionButton("Login", "person.badge.key") { store.ghLogin() }
+                ActionButton("Connect Repo", "link.badge.plus") { store.connectRepo(name: repoName) }
+                ActionButton("Commit & Push", "arrow.up.circle", tint: .blue) { store.commitPush() }
+                ActionButton("Pull", "arrow.down.circle") { store.pull() }
+                ActionButton("Verify", "checkmark.shield", tint: .green) { store.verify() }
+            }
+            TextField("repo name", text: $repoName).frame(width: 150).textFieldStyle(.roundedBorder)
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.merge").foregroundStyle(.secondary)
+                TextField("branch to merge", text: $branchToMerge).frame(width: 150).textFieldStyle(.roundedBorder)
+                Button("Merge") { store.mergeBranch(branchToMerge) }
             }
         }
     }
 
-    var logPane: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Log").font(.headline)
-                Spacer()
-                Button("Clear") { store.log = "" }.controlSize(.small)
-            }.padding(8)
+    var logCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack { Text("Log").font(.headline); Spacer(); Button("Clear") { store.log = "" }.controlSize(.small) }
             ScrollView {
-                Text(store.log.isEmpty ? "Ready." : store.log)
-                    .font(.system(size: 12, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(8)
+                Text(store.log.isEmpty ? "Ready. Choose your stocked-recipes folder if the list is empty." : store.log)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled).padding(8)
             }
+            .frame(maxHeight: .infinity)
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    @ViewBuilder private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) { content() }
+            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(nsColor: .controlBackgroundColor).opacity(0.5)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.06), lineWidth: 1))
+    }
+
+    private func sectionLabel(_ title: String, _ icon: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).foregroundStyle(.tint).font(.system(size: 12, weight: .semibold))
+            Text(title.uppercased()).font(.caption.bold()).foregroundStyle(.secondary).tracking(0.6)
         }
     }
 
-    var busyOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.25)
-            VStack(spacing: 10) { ProgressView(); Text(store.busyLabel).font(.callout) }
-                .padding(20).background(.regularMaterial).cornerRadius(12)
-        }.ignoresSafeArea()
-    }
-
-    func chip(_ k: String, _ v: String) -> some View {
-        HStack(spacing: 4) {
+    private func chip(_ k: String, _ v: String, _ icon: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon).font(.caption2).foregroundStyle(.secondary)
             Text(k).font(.caption2).foregroundStyle(.secondary)
-            Text(v).font(.caption.bold())
-        }.padding(.horizontal, 8).padding(.vertical, 4)
-            .background(Color.gray.opacity(0.15)).cornerRadius(6)
+            Text(v).font(.caption.bold()).lineLimit(1)
+        }
+        .padding(.horizontal, 9).padding(.vertical, 5).background(.tint.opacity(0.12), in: Capsule())
+    }
+}
+
+struct ActionButton: View {
+    let title: String; let icon: String; var tint: Color = .accentColor
+    let action: () -> Void
+    init(_ title: String, _ icon: String, tint: Color = .accentColor, action: @escaping () -> Void) {
+        self.title = title; self.icon = icon; self.tint = tint; self.action = action
+    }
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var isEnabled
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: icon).font(.system(size: 14, weight: .semibold)).foregroundStyle(tint).frame(width: 22)
+                Text(title).font(.callout).fontWeight(.medium).foregroundStyle(.primary).lineLimit(1)
+                Spacer(minLength: 4)
+            }
+            .padding(.vertical, 8).padding(.horizontal, 11).frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(nsColor: .controlBackgroundColor).opacity(hovering ? 0.95 : 0.5)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.primary.opacity(hovering ? 0.12 : 0.06), lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain).opacity(isEnabled ? 1 : 0.5)
+        .onHover { h in withAnimation(.easeOut(duration: 0.12)) { hovering = h && isEnabled } }
     }
 }
 
@@ -522,7 +865,7 @@ struct AddRecipeSheet: View {
                 TextField("Category", text: $category).frame(width: 130)
                 TextField("Cuisine/Area", text: $area).frame(width: 130)
             }
-            TextField("Image URL (optional)", text: $imageURL)
+            TextField("Image URL (optional — Fill Images can find one)", text: $imageURL)
             Text("Instructions — one step per line").font(.caption).foregroundStyle(.secondary)
             TextEditor(text: $steps).frame(height: 110).border(Color.gray.opacity(0.3))
             Text("Ingredients — one per line as  amount | ingredient").font(.caption).foregroundStyle(.secondary)
@@ -535,7 +878,7 @@ struct AddRecipeSheet: View {
         }.padding(16).frame(width: 560)
     }
 
-    func save() {
+    private func save() {
         var ings: [String] = []; var meas: [String] = []
         for line in ingredients.split(separator: "\n") {
             let parts = line.components(separatedBy: "|")
@@ -549,17 +892,3 @@ struct AddRecipeSheet: View {
         onSave(r); dismiss()
     }
 }
-
-// MARK: - Bootstrap a real window (works with `swift RecipeManager.swift`, no @main needed)
-
-let app = NSApplication.shared
-app.setActivationPolicy(.regular)
-let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 620),
-                      styleMask: [.titled, .closable, .resizable, .miniaturizable],
-                      backing: .buffered, defer: false)
-window.title = "Recipe Feed Manager"
-window.center()
-window.contentView = NSHostingView(rootView: ContentView())
-window.makeKeyAndOrderFront(nil)
-app.activate(ignoringOtherApps: true)
-app.run()

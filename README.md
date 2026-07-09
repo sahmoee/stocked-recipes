@@ -1,39 +1,22 @@
-# Recipe Feed Manager (GUI)
+# Recipe Manager (native macOS app)
 
-A single Swift file that opens a real macOS window to manage your Stocked recipe feed and
-its GitHub repo — like BuildBuddy, with buttons.
+Build the app: double-click **Build Recipe Manager.app.command** (permanent app, optional
+install to /Applications) or **Launch Recipe Manager.command** (build + open).
+Needs Xcode/Command Line Tools and `gh` (`brew install gh`).
 
-## Run
+## First run — pick your folder
+The app manages recipes.json in a WORKING FOLDER. On launch it looks for a saved folder,
+then ~/Documents/stocked-recipes. If the recipe list is empty, click **Choose Folder…** in
+the header and select your stocked-recipes folder. (This is why a double-clicked app can show
+nothing: apps launch from "/", not your repo — choosing the folder fixes it, and it's remembered.)
 
-Put `RecipeManager.swift` and `Launch Recipe Manager.command` in your `stocked-recipes`
-folder (the one with `recipes.json`). Then:
+## Features
+- Sidebar: searchable recipes with thumbnails; Add Recipe.
+- Feed: Rebuild, Fill Images, Validate, Add N New (only recipes not already listed).
+- Import from a GitHub repo: paste a repo URL (e.g. https://github.com/dpapathanasiou/recipes)
+  and click Import. It reads JSON recipe files directly, and does a best-effort parse of
+  plain-text/markdown recipe files. The N field caps how many to pull.
+- Drag .json files onto the window to import.
+- GitHub: Login, Connect Repo, Commit & Push, Pull, Verify, and branch Merge.
 
-- Double-click **Launch Recipe Manager.command**, or
-- Terminal: `cd` into the folder and run `swift RecipeManager.swift`
-
-A window opens (no compile step needed; Swift runs it directly).
-
-## What the buttons do
-
-Top row:
-- **Rebuild** — pulls DummyJSON + TheMealDB A-Z and merges your customs (~781), live log.
-- **Add Recipe** — a form (title, category, area, image, steps, ingredients as
-  "amount | ingredient"); saved to recipes.json and custom_recipes.json.
-- **Validate** — checks titles, steps, ingredient/measure counts, duplicates.
-- **GitHub Login** — opens a Terminal running `gh auth login` (interactive). Complete it,
-  then press Verify.
-- **repo name + Connect Repo** — inits git if needed and creates/pushes the repo via `gh`
-  (or connects an existing remote).
-- **Commit & Push** — commits and pushes recipes.json + custom_recipes.json.
-- **Pull** — git pull --rebase.
-- **Verify** — checks recipes.json, git repo, GitHub login, and remote; prints your feed URL.
-
-The header shows recipe count and GitHub status. The **Feed URL** row has a Copy button —
-paste it into `RemoteRecipeFeed.feedURLString` in the app.
-
-Left pane: searchable recipe list with per-row delete. Right pane: live log.
-
-## Requirements
-
-- macOS with the Swift toolchain (Xcode or Command Line Tools).
-- `gh` (GitHub CLI) for login/repo creation: `brew install gh`.
+Multiple custom*.json (including custom_github_<repo>.json) are merged on Rebuild.
